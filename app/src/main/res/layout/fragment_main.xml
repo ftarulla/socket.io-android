@@ -1,6 +1,7 @@
 <LinearLayout
         xmlns:android="http://schemas.android.com/apk/res/android"
-        xmlns:tools="http://schemas.android.com/tools"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:orientation="vertical"
@@ -10,11 +11,28 @@
             android:id="@+id/messages"
             android:layout_width="match_parent"
             android:layout_height="0dp"
-            android:layout_weight="1"
+            android:layout_weight="0.08"
             android:paddingLeft="@dimen/activity_horizontal_margin"
             android:paddingRight="@dimen/activity_horizontal_margin"
             android:scrollbars="vertical"
             android:scrollbarStyle="outsideOverlay"/>
+
+    <LinearLayout
+        android:orientation="vertical"
+        android:layout_width="match_parent"
+        android:layout_height="103dp"
+        android:layout_weight="0.03"
+        android:weightSum="1">
+
+        <ImageView
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:src="@drawable/ic_launcher"
+            android:id="@+id/fileImageView"
+            android:layout_weight="0.74" />
+
+    </LinearLayout>
+
     <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -27,7 +45,7 @@
                 android:id="@+id/message_input"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
+                android:layout_weight="0.57"
                 android:hint="@string/prompt_message"
                 android:imeActionId="@+id/send"
                 android:imeActionLabel="@string/action_send"
@@ -41,6 +59,12 @@
                 android:layout_height="wrap_content"
                 android:src="@android:drawable/ic_menu_send"
                 android:contentDescription="@string/action_send"/>
+
+        <Button
+            android:text="File"
+            android:layout_width="67dp"
+            android:layout_height="wrap_content"
+            android:id="@+id/file_button" />
 
     </LinearLayout>
 

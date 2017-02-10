@@ -2,14 +2,22 @@ package com.github.nkzawa.socketio.androidchat;
 
 import android.app.Activity;
 import android.content.Intent;
+import android.database.Cursor;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
+import android.os.ParcelFileDescriptor;
+import android.provider.MediaStore;
 import android.support.v4.app.Fragment;
 import android.support.v7.widget.LinearLayoutManager;
 import android.support.v7.widget.RecyclerView;
 import android.text.Editable;
 import android.text.TextUtils;
 import android.text.TextWatcher;
+import android.util.Base64;
+import android.util.Log;
 import android.view.KeyEvent;
 import android.view.LayoutInflater;
 import android.view.Menu;
@@ -18,8 +26,10 @@ import android.view.MenuItem;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.inputmethod.EditorInfo;
+import android.widget.Button;
 import android.widget.EditText;
 import android.widget.ImageButton;
+import android.widget.ImageView;
 import android.widget.TextView;
 import android.widget.Toast;
 import io.socket.client.Socket;
@@ -27,6 +37,14 @@ import io.socket.emitter.Emitter;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileDescriptor;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.io.InputStream;
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -39,6 +57,8 @@ public class MainFragment extends Fragment {
     private static final int REQUEST_LOGIN = 0;
 
     private static final int TYPING_TIMER_LENGTH = 600;
+
+    private static final int READ_REQUEST_CODE = 42;
 
     private RecyclerView mMessagesView;
     private EditText mInputMessageView;
@@ -69,8 +89,8 @@ public class MainFragment extends Fragment {
 
         ChatApplication app = (ChatApplication) getActivity().getApplication();
         mSocket = app.getSocket();
-        mSocket.on(Socket.EVENT_CONNECT,onConnect);
-        mSocket.on(Socket.EVENT_DISCONNECT,onDisconnect);
+        mSocket.on(Socket.EVENT_CONNECT, onConnect);
+        mSocket.on(Socket.EVENT_DISCONNECT, onDisconnect);
         mSocket.on(Socket.EVENT_CONNECT_ERROR, onConnectError);
         mSocket.on(Socket.EVENT_CONNECT_TIMEOUT, onConnectError);
         mSocket.on("new message", onNewMessage);
@@ -78,6 +98,7 @@ public class MainFragment extends Fragment {
         mSocket.on("user left", onUserLeft);
         mSocket.on("typing", onTyping);
         mSocket.on("stop typing", onStopTyping);
+        mSocket.on("fast response", onFASTResponse);
         mSocket.connect();
 
         startSignIn();
@@ -104,6 +125,7 @@ public class MainFragment extends Fragment {
         mSocket.off("user left", onUserLeft);
         mSocket.off("typing", onTyping);
         mSocket.off("stop typing", onStopTyping);
+        mSocket.off("fast response", onFASTResponse);
     }
 
     @Override
@@ -132,8 +154,14 @@ public class MainFragment extends Fragment {
 
             @Override
             public void onTextChanged(CharSequence s, int start, int before, int count) {
-                if (null == mUsername) return;
-                if (!mSocket.connected()) return;
+                if (null == mUsername) {
+                    Log.e("onTextChanged", "No username!");
+                    return;
+                }
+                if (!mSocket.connected()) {
+                    Log.e("onTextChanged", "No socket!");
+                    return;
+                }
 
                 if (!mTyping) {
                     mTyping = true;
@@ -156,6 +184,35 @@ public class MainFragment extends Fragment {
                 attemptSend();
             }
         });
+
+        Button fileButton = (Button) view.findViewById(R.id.file_button);
+        fileButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                attemptSelectFile();
+            }
+        });
+    }
+
+    private void attemptSelectFile() {
+
+        // ACTION_OPEN_DOCUMENT is the intent to choose a file via the system's file
+        // browser.
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+
+        // Filter to only show results that can be "opened", such as a
+        // file (as opposed to a list of contacts or timezones)
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+
+        // Filter to show only images, using the image MIME data type.
+        // If one wanted to search for ogg vorbis files, the type would be "audio/ogg".
+        // To search for all documents available via installed storage providers,
+        // it would be "*/*".
+        intent.setType("image/*");
+
+
+        // la respuesta en onActivityResult
+        startActivityForResult(intent, READ_REQUEST_CODE);
     }
 
     @Override
@@ -166,11 +223,95 @@ public class MainFragment extends Fragment {
             return;
         }
 
-        mUsername = data.getStringExtra("username");
-        int numUsers = data.getIntExtra("numUsers", 1);
+        // ver startSignIn()
+        if (requestCode == REQUEST_LOGIN) {
+            mUsername = data.getStringExtra("username");
+            int numUsers = data.getIntExtra("numUsers", 1);
 
-        addLog(getResources().getString(R.string.message_welcome));
-        addParticipantsLog(numUsers);
+            addLog(getResources().getString(R.string.message_welcome));
+            addParticipantsLog(numUsers);
+        }
+
+        ///////////////////////////////////////////////////////////////////////
+        // The ACTION_OPEN_DOCUMENT intent was sent with the request code
+        // READ_REQUEST_CODE. If the request code seen here doesn't match, it's the
+        // response to some other intent, and the code below shouldn't run at all.
+        //
+        // ver attemptSelectFile()
+        if (requestCode == READ_REQUEST_CODE && resultCode == Activity.RESULT_OK) {
+            // The document selected by the user won't be returned in the intent.
+            // Instead, a URI to that document will be contained in the return intent
+            // provided to this method as a parameter.
+            // Pull that URI using resultData.getData().
+            Uri uri = null;
+            if (data != null) {
+                uri = data.getData();
+                Log.i("TAG", "Uri: " + uri.toString());
+
+                try {
+                    // show image in view
+                    showImage(uri);
+                    // send image to server
+                    sendImage(uri);
+                } catch (IOException e) {
+                    e.printStackTrace();
+                } catch (JSONException e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+
+    }
+
+    private Emitter.Listener onFASTResponse = new Emitter.Listener() {
+        @Override
+        public void call(final Object... args) {
+            getActivity().runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    JSONObject data = (JSONObject) args[0];
+                    String username;
+                    String message;
+                    try {
+                        username = data.getString("username");
+                        message = data.getString("message");
+                    } catch (JSONException e) {
+                        return;
+                    }
+
+                    removeTyping(username);
+                    addMessage(username, message);
+                }
+            });
+        }
+    };
+
+    private void showImage(Uri uri) throws IOException {
+        //ParcelFileDescriptor parcelFileDescriptor =
+        //        getActivity().getContentResolver().openFileDescriptor(uri, "r");
+        //FileDescriptor fileDescriptor = parcelFileDescriptor.getFileDescriptor();
+        //Bitmap image = BitmapFactory.decodeFileDescriptor(fileDescriptor);
+        //parcelFileDescriptor.close();
+        //return image;
+
+        ImageView imageView = (ImageView) getView().findViewById(R.id.fileImageView);
+        imageView.setImageURI(uri);
+    }
+
+    private void sendImage(Uri uri) throws JSONException, FileNotFoundException {
+        JSONObject data = new JSONObject();
+        data.put("image", encodeImage(uri));
+        mSocket.emit("new message", data);
+    }
+
+    private String encodeImage(Uri uri) throws FileNotFoundException {
+
+        InputStream fis = getActivity().getContentResolver().openInputStream(uri);
+        Bitmap bm = BitmapFactory.decodeStream(fis);
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        bm.compress(Bitmap.CompressFormat.PNG, 100, output);
+
+        return Base64.encodeToString(output.toByteArray(), Base64.DEFAULT);
     }
 
     @Override
@@ -323,6 +464,7 @@ public class MainFragment extends Fragment {
                     try {
                         username = data.getString("username");
                         message = data.getString("message");
+                        Log.i("onNewMessage", username);
                     } catch (JSONException e) {
                         return;
                     }
