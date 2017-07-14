@@ -2,14 +2,11 @@ package com.github.nkzawa.socketio.androidchat;
 
 import android.app.Activity;
 import android.content.Intent;
-import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
-import android.os.ParcelFileDescriptor;
-import android.provider.MediaStore;
 import android.support.v4.app.Fragment;
 import android.support.v7.widget.LinearLayoutManager;
 import android.support.v7.widget.RecyclerView;
@@ -32,27 +29,36 @@ import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.TextView;
 import android.widget.Toast;
-import io.socket.client.Socket;
-import io.socket.emitter.Emitter;
+
 import org.json.JSONException;
 import org.json.JSONObject;
+import org.opencv.android.OpenCVLoader;
+import org.opencv.android.Utils;
+import org.opencv.core.CvType;
+import org.opencv.core.KeyPoint;
+import org.opencv.core.Mat;
+import org.opencv.core.MatOfKeyPoint;
+import org.opencv.core.Scalar;
+import org.opencv.features2d.Feature2D;
+import org.opencv.features2d.Features2d;
+import org.opencv.imgproc.Imgproc;
 
 import java.io.ByteArrayOutputStream;
-import java.io.File;
-import java.io.FileDescriptor;
-import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
-import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
 
+import io.socket.client.Socket;
+import io.socket.emitter.Emitter;
 
 /**
  * A chat fragment containing messages view and input form.
  */
 public class MainFragment extends Fragment {
+
+    private static final String TAG = "MainFragment";
 
     private static final int REQUEST_LOGIN = 0;
 
@@ -71,6 +77,11 @@ public class MainFragment extends Fragment {
 
     private Boolean isConnected = true;
 
+    private Mat img = null;
+    // Timer
+    private long startTime = 0;
+
+    //
     public MainFragment() {
         super();
     }
@@ -269,6 +280,18 @@ public class MainFragment extends Fragment {
             getActivity().runOnUiThread(new Runnable() {
                 @Override
                 public void run() {
+
+                    // TODO: Timer
+                    long currentTime = System.nanoTime();
+                    long diffTime = currentTime - startTime;
+
+                    Log.d(TAG, "Time in nanoTime:");
+                    Log.d(TAG, "start time: " + String.valueOf(startTime));
+                    Log.d(TAG, "current time: " + String.valueOf(currentTime));
+                    Log.d(TAG, "difference time (en nanoseg): " + String.valueOf(diffTime));
+                    Log.d(TAG, "difference time (en segundos): " + String.valueOf( (double)(diffTime) / 1000000000.0)); // seconds
+
+                    //
                     JSONObject data = (JSONObject) args[0];
                     String username;
                     String message;
@@ -278,7 +301,56 @@ public class MainFragment extends Fragment {
                     } catch (JSONException e) {
                         return;
                     }
+                    Log.i("onFASTResponse", message.toString());
+                    String[] sCoors = message.replaceAll("\\[\\[", "")
+                                            .replaceAll("\\]\\]", "")
+                                            .replaceAll("\\[", "")
+                                            //.replaceAll("\\s", "")
+                                            .split("\\],");
+                    Log.i("onFASTResponse", sCoors[0].toString());
+                    Log.i("onFASTResponse", sCoors[1].toString());
 
+                    // procesar la respuesta de los keypoints
+                    //String[] coors = message.replaceAll("\\[", "").replaceAll("\\]", "").replaceAll("\\s", "").split(",");
+
+                    List<KeyPoint> lkeypoints = new ArrayList<KeyPoint>();
+
+                    for (int i = 0; i < sCoors.length; i++) {
+                        try {
+                            ArrayList coor = new ArrayList(2);
+                            String[] xy = sCoors[i].split(",");
+
+                            KeyPoint kp = new KeyPoint(Float.parseFloat(xy[0]), Float.parseFloat(xy[1]), 1);
+                            lkeypoints.add(kp);
+
+                        } catch (NumberFormatException nfe) {
+                            //NOTE: write something here if you need to recover from formatting errors
+                        };
+                    }
+                    Log.d(TAG, "Total Keypoints: " + String.valueOf(lkeypoints.size()));
+
+//                    KeyPoint kp = new KeyPoint(results[1], results[0], 1);
+//                    Log.i("onFASTResponse", "KeyPoint: " + kp.toString());
+
+                    MatOfKeyPoint keypoints = new MatOfKeyPoint();
+                    keypoints.fromList(lkeypoints);
+
+                    Mat outimg = new Mat(img.rows(), img.cols(), img.type());
+
+                    //https://groups.google.com/forum/#!topic/android-opencv/co9Zv9pon30
+                    Mat rgb = new Mat();
+                    Imgproc.cvtColor(img, rgb, Imgproc.COLOR_RGBA2RGB);
+                    Features2d.drawKeypoints(rgb, keypoints, rgb, new Scalar(0, 255, 0), 0);
+                    Imgproc.cvtColor(rgb, outimg, Imgproc.COLOR_RGB2RGBA);
+                    // Fin FIX
+
+                    ImageView imageView = (ImageView) getView().findViewById(R.id.fileImageView);
+                    Bitmap bm = Bitmap.createBitmap(outimg.cols(), outimg.rows(), Bitmap.Config.ARGB_8888);
+                    Utils.matToBitmap(outimg, bm);
+                    imageView.setImageBitmap(bm);
+                    Log.i("onFASTResponse", "Image set on imageView");
+
+                    // mostrar mensaje
                     removeTyping(username);
                     addMessage(username, message);
                 }
@@ -296,11 +368,34 @@ public class MainFragment extends Fragment {
 
         ImageView imageView = (ImageView) getView().findViewById(R.id.fileImageView);
         imageView.setImageURI(uri);
+
+        // http://stackoverflow.com/questions/39066334/load-images-with-opencv-from-assets-folder-in-android
+        InputStream stream = null;
+        //Uri uri = Uri.parse(uri);
+        try {
+            stream = this.getActivity().getContentResolver().openInputStream(uri);
+        } catch (FileNotFoundException e) {
+            e.printStackTrace();
+        }
+
+        BitmapFactory.Options bmpFactoryOptions = new BitmapFactory.Options();
+        bmpFactoryOptions.inPreferredConfig = Bitmap.Config.ARGB_8888;
+
+        Bitmap bmp = BitmapFactory.decodeStream(stream, null, bmpFactoryOptions);
+        img = new Mat(1080, 1920, CvType.CV_8UC3);
+        Utils.bitmapToMat(bmp, img);
+
+        Log.i("showImage", "Mat: " + img.toString());
+
+
     }
 
     private void sendImage(Uri uri) throws JSONException, FileNotFoundException {
         JSONObject data = new JSONObject();
         data.put("image", encodeImage(uri));
+
+        // TODO: Timer
+        this.startTime = System.nanoTime();
         mSocket.emit("new message", data);
     }
 
